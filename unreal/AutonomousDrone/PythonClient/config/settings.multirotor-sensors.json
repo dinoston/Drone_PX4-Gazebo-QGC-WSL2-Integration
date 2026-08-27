@@ -1,0 +1,55 @@
+{
+  "SeeDocsAt": "https://cosys-lab.github.io/Cosys-AirSim/settings/",
+  "SettingsVersion": 2.0,
+  "SimMode": "Multirotor",
+  "SubWindows": [
+    {
+      "WindowID": 0,
+      "CameraName": "0",
+      "ImageType": 0,
+      "VehicleName": "SimpleFlight",
+      "Visible": true
+    },
+    {
+      "WindowID": 1,
+      "CameraName": "0",
+      "ImageType": 3,
+      "VehicleName": "SimpleFlight",
+      "Visible": true
+    },
+    {
+      "WindowID": 2,
+      "CameraName": "0",
+      "ImageType": 5,
+      "VehicleName": "SimpleFlight",
+      "Visible": true
+    }
+  ],
+  "Vehicles": {
+    "SimpleFlight": {
+      "VehicleType": "SimpleFlight",
+      "AutoCreate": true,
+      "Sensors": {
+        "Lidar1": {
+          "SensorType": 6,
+          "Enabled": true,
+          "NumberOfChannels": 16,
+          "Range": 100,
+          "RotationsPerSecond": 10,
+          "MeasurementsPerCycle": 1024,
+          "HorizontalFOVStart": 0,
+          "HorizontalFOVEnd": 360,
+          "VerticalFOVUpper": 10,
+          "VerticalFOVLower": -30,
+          "X": 0,
+          "Y": 0,
+          "Z": 0,
+          "Roll": 0,
+          "Pitch": 0,
+          "Yaw": 0,
+          "DrawDebugPoints": true
+        }
+      }
+    }
+  }
+}

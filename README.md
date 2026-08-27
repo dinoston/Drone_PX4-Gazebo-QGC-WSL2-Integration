@@ -142,3 +142,29 @@ Unreal Editor에서 프로젝트를 열고 Play를 실행한 다음 아래 파�
 unreal/AutonomousDrone/PythonClient/tests/run_takeoff_test.bat
 ```
 
+### Python Mission Control
+
+`unreal/AutonomousDrone/PythonClient`에는 성공적으로 연동을 확인한 데스크톱
+관제 UI가 포함되어 있습니다.
+
+- AirSim 연결, ARM/DISARM, 이륙, 호버링, 목적지 이동, 착륙, 긴급 정지
+- 현재 위치·속도·자세 텔레메트리
+- RGB·Depth·Segmentation 동시 영상
+- LiDAR 3D 점군
+- 사각형·하트·배송 미션 모듈
+
+필요 패키지를 설치합니다.
+
+```powershell
+python -m pip install -r unreal/AutonomousDrone/PythonClient/requirements.txt
+```
+
+센서 설정 예제
+`PythonClient/config/settings.multirotor-sensors.json`을
+`Documents/AirSim/settings.json`으로 복사하고 Unreal Editor에서 Play를
+실행한 다음 아래 파일을 더블클릭합니다.
+
+```text
+unreal/AutonomousDrone/PythonClient/run_mission_control.bat
+```
+
