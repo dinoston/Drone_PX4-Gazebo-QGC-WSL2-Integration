@@ -3,3 +3,21 @@
 *.ulg
 .mcp.json
 
+# Unreal Engine generated files
+**/.vs/
+**/.vscode/
+**/Binaries/
+**/DerivedDataCache/
+**/Intermediate/
+**/Saved/
+**/Build/
+*.sln
+
+# Third-party AirSim plugin (install from the official release)
+**/Plugins/AirSim/
+
+# Python generated files
+**/__pycache__/
+*.py[cod]
+.venv/
+

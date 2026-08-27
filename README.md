@@ -95,3 +95,50 @@ Gazebo의 Reset 버튼은 동적으로 생성된 `x500_0` 기체를 제거할 �
 - WSL을 재시작하면 Windows 호스트 IP가 달라질 수 있습니다.
 - 공식 문서: [PX4 Gazebo Simulation](https://docs.px4.io/main/en/sim_gazebo_gz/)
 
+## Unreal Engine + Cosys-AirSim 프로토타입
+
+`unreal/AutonomousDrone`에는 Unreal Engine 5.5와 Cosys-AirSim으로 구성한
+드론 자율비행 프로토타입이 포함되어 있습니다.
+
+포함된 항목:
+
+- Unreal Engine 5.5 C++ 프로젝트와 프로젝트 설정
+- `AirSimGameMode` 기본 게임 모드 설정
+- 기본 테스트 레벨 및 프로젝트 콘텐츠
+- Python 이륙, 5초 호버링, 착륙 연결 테스트
+
+AirSim 플러그인은 약 2.8GB의 생성 파일과 바이너리를 포함하므로 저장소에
+직접 포함하지 않습니다. 아래 공식 릴리스에서 Unreal 5.5용
+`AirSim_plugin_Windows_55_33.zip`을 받아 설치합니다.
+
+- [Cosys-AirSim v3.3 for Unreal 5.5](https://github.com/Cosys-Lab/Cosys-AirSim/releases/tag/5.5-v3.3)
+
+압축 파일의 `AirSim` 폴더를 다음 위치에 복사합니다.
+
+```text
+unreal/AutonomousDrone/Plugins/AirSim
+```
+
+Python API를 설치합니다.
+
+```powershell
+python -m pip install cosysairsim
+```
+
+`Documents/AirSim/settings.json`에는 다음 설정이 필요합니다.
+
+```json
+{
+  "SeeDocsAt": "https://cosys-lab.github.io/Cosys-AirSim/settings/",
+  "SettingsVersion": 2.0,
+  "SimMode": "Multirotor"
+}
+```
+
+Unreal Editor에서 프로젝트를 열고 Play를 실행한 다음 아래 파일을
+더블클릭하면 드론이 이륙하고 5초간 호버링한 뒤 착륙합니다.
+
+```text
+unreal/AutonomousDrone/PythonClient/tests/run_takeoff_test.bat
+```
+
