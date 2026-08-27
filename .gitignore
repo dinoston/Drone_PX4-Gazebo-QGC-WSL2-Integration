@@ -1,0 +1,5 @@
+*.exe
+*.msi
+*.ulg
+.mcp.json
+
