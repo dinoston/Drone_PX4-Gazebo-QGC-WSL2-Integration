@@ -17,6 +17,12 @@ This repository documents an evolving autonomous-drone simulation project. The c
 - Experimental LiDAR obstacle monitoring and route replanning
 - Planned work on smoother motion, static/dynamic obstacle avoidance, object tracking, and tag-based behaviors
 
+### Demo Video
+
+[Watch the AirSim minimap navigation demo](media/airsim-minimap-navigation-demo.mp4)
+
+The video shows the current Unreal Engine and Mission Control workflow, including minimap-based movement testing. Motion smoothing and obstacle-avoidance behavior are still under development.
+
 ### Project Status
 
 - **Active:** Unreal Engine + Cosys-AirSim autonomous-navigation prototype
@@ -191,6 +197,12 @@ Mission Control includes AirSim connection controls, flight commands, telemetry,
 - AirSim `moveOnPathAsync()` 기반 경로 이동
 - LiDAR 장애물 감시 및 경로 재탐색 실험
 - 향후 부드러운 이동, 정적·동적 장애물 회피, 객체 추적과 태그별 행동 개발 예정
+
+### 데모 영상
+
+[AirSim 미니맵 자율이동 데모 보기](media/airsim-minimap-navigation-demo.mp4)
+
+영상은 Unreal Engine과 Mission Control에서 미니맵 기반 이동을 시험하는 현재 개발 상태를 보여줍니다. 이동 부드러움과 장애물 회피 동작은 계속 개선 중입니다.
 
 ### 개발 상태
 
