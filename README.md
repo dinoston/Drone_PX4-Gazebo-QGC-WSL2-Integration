@@ -1,3 +1,53 @@
+# Autonomous Drone Simulation: Unreal Engine, AirSim, PX4 and Gazebo
+
+## English
+
+This repository documents an evolving autonomous-drone simulation project. The current development focus is an **Unreal Engine 5.5 + Cosys-AirSim** workflow with a Python mission-control application. Earlier PX4 SITL, Gazebo Harmonic, and QGroundControl experiments are retained as a reference but are currently on hold.
+
+### Current AirSim Work
+
+- Desktop mission-control UI for connection, arming, takeoff, hover, landing, and emergency stop
+- Real-time position, velocity, altitude, and attitude telemetry
+- RGB, depth, segmentation, and LiDAR visualization
+- Clickable AirBase minimap for selecting spawn point A and destination B
+- A* waypoint planning with altitude-layer alternatives
+- AirSim `moveOnPathAsync()` path execution
+- Experimental LiDAR obstacle monitoring and route replanning
+- Planned work on smoother motion, static/dynamic obstacle avoidance, object tracking, and tag-based behaviors
+
+### Project Status
+
+- **Active:** Unreal Engine + Cosys-AirSim autonomous-navigation prototype
+- **On hold:** PX4 SITL + Gazebo Harmonic + QGroundControl on WSL2
+- **Simulation only:** this repository does not control a real aircraft
+
+---
+
+## 한국어
+
+이 저장소는 자율 드론 시뮬레이션 개발 과정을 정리한 프로젝트입니다. 현재는 **Unreal Engine 5.5 + Cosys-AirSim** 환경과 Python Mission Control을 중심으로 개발하고 있습니다. 이전에 진행한 PX4 SITL, Gazebo Harmonic, QGroundControl 연동 실험은 참고 자료로 유지하지만 현재는 보류 중입니다.
+
+### 현재 AirSim 작업
+
+- 연결, ARM/DISARM, 이륙, 호버링, 착륙 및 긴급 정지 UI
+- 위치, 속도, 고도, 자세 텔레메트리
+- RGB, Depth, Segmentation 및 LiDAR 시각화
+- AirBase 미니맵에서 스폰 지점 A와 목적지 B 선택
+- 고도 대안을 포함한 A* 웨이포인트 경로계획
+- AirSim `moveOnPathAsync()` 기반 경로 이동
+- LiDAR 장애물 감시 및 경로 재탐색 실험
+- 향후 부드러운 이동, 정적·동적 장애물 회피, 객체 추적과 태그별 행동 개발 예정
+
+### 개발 상태
+
+- **진행 중:** Unreal Engine + Cosys-AirSim 자율항법 프로토타입
+- **보류 중:** WSL2 기반 PX4 SITL + Gazebo Harmonic + QGroundControl
+- **시뮬레이션 전용:** 실제 기체를 제어하지 않습니다.
+
+---
+
+## 기존 PX4·Gazebo 및 AirSim 상세 기록
+
 # PX4 + Gazebo + QGroundControl on Windows/WSL2
 
 Windows 10/11에서 WSL2 Ubuntu 24.04, PX4 SITL, Gazebo Harmonic 및
@@ -167,4 +217,3 @@ python -m pip install -r unreal/AutonomousDrone/PythonClient/requirements.txt
 ```text
 unreal/AutonomousDrone/PythonClient/run_mission_control.bat
 ```
-
