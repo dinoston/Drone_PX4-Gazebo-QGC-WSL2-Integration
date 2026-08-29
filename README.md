@@ -4,6 +4,8 @@
 
 This repository documents an evolving autonomous-drone simulation project. The current development focus is an **Unreal Engine 5.5 + Cosys-AirSim** workflow with a Python mission-control application. Earlier PX4 SITL, Gazebo Harmonic, and QGroundControl experiments are retained as a reference but are currently on hold.
 
+> All flight operations in this repository are simulations. This project does not control a real aircraft.
+
 ### Current AirSim Work
 
 - Desktop mission-control UI for connection, arming, takeoff, hover, landing, and emergency stop
@@ -19,7 +21,159 @@ This repository documents an evolving autonomous-drone simulation project. The c
 
 - **Active:** Unreal Engine + Cosys-AirSim autonomous-navigation prototype
 - **On hold:** PX4 SITL + Gazebo Harmonic + QGroundControl on WSL2
-- **Simulation only:** this repository does not control a real aircraft
+- **Simulation only:** no real aircraft is controlled
+
+## PX4, Gazebo and QGroundControl Setup — On Hold
+
+The following workflow records the completed initial experiment for running PX4 SITL and Gazebo Harmonic inside WSL2 and connecting them to QGroundControl on Windows.
+
+### Configuration
+
+- Ubuntu 24.04 WSL distribution installed at `E:\WSL\Ubuntu-24.04`
+- PX4-Autopilot installed in the WSL home directory
+- Gazebo Harmonic running the x500 multicopter
+- Windows QGroundControl connected to PX4 SITL through MAVLink
+
+### 1. Install WSL2 and Ubuntu
+
+Run the following scripts in an administrator PowerShell window:
+
+1. `scripts/enable-wsl2-e-drive.ps1`
+2. Restart Windows.
+3. `scripts/install-latest-wsl-msi.ps1`
+4. `scripts/install-ubuntu-e.ps1`
+
+When Ubuntu starts for the first time, create a Linux username and password.
+
+### 2. Install PX4 and Gazebo
+
+Run the following commands in the Ubuntu terminal:
+
+```bash
+sudo apt update
+sudo apt install -y git
+cd ~
+git clone https://github.com/PX4/PX4-Autopilot.git --recursive
+cd PX4-Autopilot
+bash ./Tools/setup/ubuntu.sh
+```
+
+Restart Windows after the installation completes.
+
+### 3. Run the Simulation
+
+Confirm that `$LinuxUser` in `scripts/start-px4-sim.ps1` matches your Ubuntu username, then run the script from PowerShell.
+
+The script uses X11 and software rendering as a workaround for cases where the Gazebo GUI does not appear correctly through WSLg.
+
+When the PX4 console displays `pxh>`, find the Windows host address:
+
+```bash
+ip route show default
+```
+
+Use the address shown after `via` in the following command and enter it in the `pxh>` console:
+
+```text
+mavlink start -u 14556 -o 14550 -t <WINDOWS_HOST_IP> -r 4000000 -x
+```
+
+Example:
+
+```text
+mavlink start -u 14556 -o 14550 -t 172.30.64.1 -r 4000000 -x
+```
+
+QGroundControl should connect automatically after it starts.
+
+### 4. Basic Flight Test
+
+Use the PX4 console:
+
+```text
+commander takeoff
+commander land
+```
+
+During flight, a nearby point can be selected in QGroundControl with **Go to location** to test horizontal movement.
+
+### 5. Shutdown
+
+1. Run `commander land`.
+2. Wait until `Disarmed by landing` appears.
+3. Press `Ctrl+C` in the PX4 terminal.
+4. Close Gazebo and QGroundControl.
+
+Avoid using Gazebo's Reset button because it can remove the dynamically spawned `x500_0` vehicle.
+
+### PX4/Gazebo Notes
+
+- QGroundControl displays a real-world map, while Gazebo uses a separate virtual world.
+- Begin with short movement tests within approximately 10–100 m.
+- The Windows host IP may change after WSL restarts.
+- Official documentation: [PX4 Gazebo Simulation](https://docs.px4.io/main/en/sim_gazebo_gz/)
+
+## Unreal Engine + Cosys-AirSim Prototype
+
+The `unreal/AutonomousDrone` directory contains an Unreal Engine 5.5 and Cosys-AirSim autonomous-drone prototype.
+
+### Included Components
+
+- Unreal Engine 5.5 C++ project configuration
+- `AirSimGameMode` as the default game mode
+- Test level and project content
+- Python takeoff, hover, movement, and landing tests
+- Python Mission Control dashboard
+- Camera and LiDAR sensor visualization
+- Minimap-based destination selection and navigation experiments
+
+The AirSim plugin contains large generated files and binaries and is therefore not included directly. Download `AirSim_plugin_Windows_55_33.zip` from:
+
+- [Cosys-AirSim v3.3 for Unreal Engine 5.5](https://github.com/Cosys-Lab/Cosys-AirSim/releases/tag/5.5-v3.3)
+
+Copy the extracted `AirSim` folder to:
+
+```text
+unreal/AutonomousDrone/Plugins/AirSim
+```
+
+Install the Python API:
+
+```powershell
+python -m pip install cosysairsim
+```
+
+A minimal `Documents/AirSim/settings.json` configuration is:
+
+```json
+{
+  "SeeDocsAt": "https://cosys-lab.github.io/Cosys-AirSim/settings/",
+  "SettingsVersion": 2.0,
+  "SimMode": "Multirotor"
+}
+```
+
+Start Play in Unreal Editor, then run:
+
+```text
+unreal/AutonomousDrone/PythonClient/tests/run_takeoff_test.bat
+```
+
+### Python Mission Control
+
+Install its dependencies:
+
+```powershell
+python -m pip install -r unreal/AutonomousDrone/PythonClient/requirements.txt
+```
+
+Copy the sensor configuration example to `Documents/AirSim/settings.json`, start Play in Unreal Editor, and run:
+
+```text
+unreal/AutonomousDrone/PythonClient/run_mission_control.bat
+```
+
+Mission Control includes AirSim connection controls, flight commands, telemetry, RGB/depth/segmentation views, LiDAR point-cloud display, and experimental autonomous missions.
 
 ---
 
