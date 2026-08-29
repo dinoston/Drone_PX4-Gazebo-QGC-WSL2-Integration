@@ -1,5 +1,11 @@
 # Autonomous Drone Simulation: Unreal Engine, AirSim, PX4 and Gazebo
 
+## Demo Preview / 데모 미리보기
+
+[![AirSim minimap navigation demo](media/airsim-minimap-navigation-preview.gif)](media/airsim-minimap-navigation-demo.mp4)
+
+**Click the animated preview to watch the full MP4. / 움직이는 미리보기를 클릭하면 전체 MP4 영상을 볼 수 있습니다.**
+
 ## English
 
 This repository documents an evolving autonomous-drone simulation project. The current development focus is an **Unreal Engine 5.5 + Cosys-AirSim** workflow with a Python mission-control application. Earlier PX4 SITL, Gazebo Harmonic, and QGroundControl experiments are retained as a reference but are currently on hold.
