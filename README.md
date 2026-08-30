@@ -16,16 +16,16 @@ This repository documents an evolving autonomous-drone simulation project. The c
 
 - Desktop mission-control UI for connection, arming, takeoff, hover, landing, and emergency stop
 - Real-time position, velocity, altitude, and attitude telemetry
-- RGB, depth, segmentation, and LiDAR visualization
+- RGB, depth, and segmentation views with LiDAR safety sensing
 - Clickable AirBase minimap for selecting spawn point A and destination B
-- A* waypoint planning with altitude-layer alternatives
+- A* waypoint planning with fixed-altitude horizontal detours
 - AirSim `moveOnPathAsync()` path execution
-- Experimental LiDAR obstacle monitoring and route replanning
-- Planned work on smoother motion, static/dynamic obstacle avoidance, object tracking, and tag-based behaviors
+- Reactive LiDAR obstacle avoidance, route replanning, and collision recovery
+- Planned work on vertical/dynamic obstacle avoidance, object tracking, and tag-based behaviors
 
 ### LiDAR Visualization Performance Tuning
 
-During flight testing, continuously rendering the green LiDAR debug points caused the Unreal view to stutter and appear to shake. The LiDAR sensor remains enabled for obstacle detection, but its in-world debug visualization is disabled with `"DrawDebugPoints": false`. The scan density was also reduced from 1024 to 256 measurements per cycle.
+During flight testing, continuously rendering the green LiDAR debug points caused the Unreal view to stutter and appear to shake. The LiDAR sensor remains enabled for obstacle detection, while its expensive in-world debug visualization is disabled.
 
 RGB, Depth, and Segmentation subwindows remain visible. This optimization disables only the expensive green LiDAR visualization; LiDAR data collection and the Python obstacle-planning pipeline continue to operate.
 
@@ -33,7 +33,7 @@ RGB, Depth, and Segmentation subwindows remain visible. This optimization disabl
 
 [Watch the AirSim minimap navigation demo](media/airsim-minimap-navigation-demo.mp4)
 
-The video shows the current Unreal Engine and Mission Control workflow, including minimap-based movement testing. Motion smoothing and obstacle-avoidance behavior are still under development.
+The video shows the current Unreal Engine and Mission Control workflow, including minimap-based movement testing.
 
 ### Project Status
 
@@ -203,16 +203,16 @@ Mission Control includes AirSim connection controls, flight commands, telemetry,
 
 - 연결, ARM/DISARM, 이륙, 호버링, 착륙 및 긴급 정지 UI
 - 위치, 속도, 고도, 자세 텔레메트리
-- RGB, Depth, Segmentation 및 LiDAR 시각화
+- RGB, Depth, Segmentation 화면과 LiDAR 안전 감지
 - AirBase 미니맵에서 스폰 지점 A와 목적지 B 선택
-- 고도 대안을 포함한 A* 웨이포인트 경로계획
+- 현재 고도를 유지하는 A* 수평 우회 경로계획
 - AirSim `moveOnPathAsync()` 기반 경로 이동
-- LiDAR 장애물 감시 및 경로 재탐색 실험
-- 향후 부드러운 이동, 정적·동적 장애물 회피, 객체 추적과 태그별 행동 개발 예정
+- LiDAR 장애물 회피, 경로 재탐색 및 충돌 복구
+- 향후 상하·동적 장애물 회피, 객체 추적과 태그별 행동 개발 예정
 
 ### LiDAR 시각화 성능 조정
 
-비행 시험 중 초록색 LiDAR 디버그 점을 Unreal 화면에 계속 그릴 때 화면이 끊기고 흔들려 보이는 현상이 발생했습니다. 장애물 감지를 위한 LiDAR 센서는 계속 사용하지만, Unreal 내부 디버그 표시는 `"DrawDebugPoints": false`로 비활성화했습니다. 회전당 측정량도 1024에서 256으로 낮췄습니다.
+비행 시험 중 초록색 LiDAR 디버그 점을 Unreal 화면에 계속 그릴 때 화면이 끊기고 흔들려 보이는 현상이 발생했습니다. 장애물 감지를 위한 LiDAR 센서는 계속 사용하며, 부하가 큰 Unreal 내부 디버그 표시는 비활성화했습니다.
 
 RGB, Depth, Segmentation 보조 화면은 계속 표시됩니다. 이 최적화는 부하가 큰 초록색 LiDAR 시각화만 끄며, LiDAR 데이터 수집과 Python 장애물 경로계획 기능은 계속 작동합니다.
 
@@ -220,7 +220,7 @@ RGB, Depth, Segmentation 보조 화면은 계속 표시됩니다. 이 최적화�
 
 [AirSim 미니맵 자율이동 데모 보기](media/airsim-minimap-navigation-demo.mp4)
 
-영상은 Unreal Engine과 Mission Control에서 미니맵 기반 이동을 시험하는 현재 개발 상태를 보여줍니다. 이동 부드러움과 장애물 회피 동작은 계속 개선 중입니다.
+영상은 Unreal Engine과 Mission Control에서 미니맵 기반 이동을 시험하는 현재 개발 상태를 보여줍니다.
 
 ### 개발 상태
 

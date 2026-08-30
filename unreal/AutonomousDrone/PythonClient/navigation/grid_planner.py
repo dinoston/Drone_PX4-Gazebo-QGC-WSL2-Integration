@@ -1,4 +1,7 @@
-"""Altitude-aware grid A* planner for an AirSim local NED world."""
+"""Altitude-aware grid A* planner for an AirSim local NED world.
+
+AirSim 로컬 NED 좌표계를 위한 고도 인식 격자 A* 경로 계획기입니다.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +24,10 @@ class PlannerConfig:
 
 
 class AltitudeGridPlanner:
-    """Plan in XY and try higher cruise layers when a route is blocked."""
+    """Plan in XY and optionally try higher layers when a route is blocked.
+
+    XY 평면에서 경로를 계획하고, 설정된 경우 막힌 경로의 상위 고도도 탐색합니다.
+    """
 
     def __init__(self, config: PlannerConfig | None = None) -> None:
         self.config = config or PlannerConfig()

@@ -72,16 +72,24 @@ class AirSimWorker(QThread):
 
     def run(self) -> None:
         next_telemetry = 0.0
-        next_sensors = 0.0
+        next_images = 0.0
+        next_lidar = 0.0
         while self._running:
             self._process_pending_commands()
             now = time.monotonic()
             if self.controller.connected and now >= next_telemetry:
                 self._poll_telemetry()
                 next_telemetry = now + 0.1
-            if self.controller.connected and self._stream_sensors and now >= next_sensors:
-                self._poll_sensors()
-                next_sensors = now + 0.35
+            # LiDAR is a flight-safety input and must keep running even when
+            # the optional camera preview stream is disabled.
+            # LiDAR는 비행 안전에 필요한 입력이므로 선택형 카메라 미리보기
+            # 스트리밍이 꺼져 있어도 계속 작동해야 합니다.
+            if self.controller.connected and now >= next_lidar:
+                self._poll_lidar()
+                next_lidar = now + 0.15
+            if self.controller.connected and self._stream_sensors and now >= next_images:
+                self._poll_images()
+                next_images = now + 0.5
             self.msleep(20)
         self.controller.disconnect()
 
@@ -131,33 +139,57 @@ class AirSimWorker(QThread):
             self.error_occurred.emit(f"텔레메트리: {exc}")
             self.controller.disconnect()
 
-    def _poll_sensors(self) -> None:
+    def _poll_images(self) -> None:
         try:
             self.images_updated.emit(self.controller.camera_images())
+        except Exception as exc:
+            now = time.monotonic()
+            if now - self._last_sensor_error > 5.0:
+                self.error_occurred.emit(f"카메라: {exc}")
+                self._last_sensor_error = now
+
+    def _poll_lidar(self) -> None:
+        try:
             self.lidar_updated.emit(self.controller.lidar_snapshot())
         except Exception as exc:
             now = time.monotonic()
             if now - self._last_sensor_error > 5.0:
-                self.error_occurred.emit(f"센서: {exc}")
+                self.error_occurred.emit(f"LiDAR: {exc}")
                 self._last_sensor_error = now
 
 
 class MissionControlWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Autonomous Drone Mission Control")
+        self.setWindowTitle("Autonomous Drone Mission Control · Avoidance v4")
         self.resize(1500, 920)
         self.settings = QSettings("AutonomousDrone", "MissionControl")
         self._connected = False
         # The AirBase capture covers 1400 m. A 2.5 m planning grid keeps
         # full-map A* practical while retaining useful obstacle clearance.
+        # AirBase 캡처 범위는 1400m이며, 2.5m 격자를 사용해 전체 지도 A*의
+        # 계산량을 줄이면서 필요한 장애물 안전거리를 유지합니다.
         self.planner = AltitudeGridPlanner(
-            PlannerConfig(half_extent_m=900.0, resolution_m=2.5)
+            PlannerConfig(
+                half_extent_m=900.0,
+                resolution_m=2.5,
+                drone_radius_m=2.5,
+                vertical_clearance_m=1.5,
+                # Keep the first avoidance stage horizontal. Repeated LiDAR
+                # replans must not alternate between different flight levels.
+                # 1단계 회피는 현재 고도를 유지해 반복 재탐색 때마다
+                # 드론이 위아래로 흔들리는 현상을 방지합니다.
+                max_extra_altitude_m=0.0,
+            )
         )
         self._telemetry: dict | None = None
         self._planned_path: list[tuple[float, float, float]] = []
         self._active_target: tuple[float, float, float] | None = None
         self._last_replan = 0.0
+        self._last_emergency_stop = 0.0
+        self._obstacle_detection_count = 0
+        self._avoidance_grace_until = 0.0
+        self._last_collision_timestamp = 0.0
         self._spawn_xy = (0.0, 0.0)
 
         self.worker = AirSimWorker()
@@ -186,7 +218,7 @@ class MissionControlWindow(QMainWindow):
         self.status_indicator.setObjectName("disconnected")
         self.connect_button = QPushButton("AirSim 연결")
         self.connect_button.clicked.connect(self._toggle_connection)
-        self.sensor_checkbox = QCheckBox("센서 스트리밍")
+        self.sensor_checkbox = QCheckBox("카메라 화면 스트리밍")
         self.sensor_checkbox.setChecked(True)
         self.sensor_checkbox.toggled.connect(self.worker.set_sensor_streaming)
         header.addWidget(title)
@@ -288,6 +320,7 @@ class MissionControlWindow(QMainWindow):
             ("속도", "speed"),
             ("속도 벡터", "velocity"),
             ("Roll / Pitch / Yaw", "attitude"),
+            ("LiDAR 감지", "lidar"),
         ]
         for label, key in fields:
             value = QLabel("—")
@@ -386,8 +419,10 @@ class MissionControlWindow(QMainWindow):
         self._active_target = target
         self.minimap.set_target(target[0], target[1])
         self.minimap.set_path(path)
-        if replan:
-            self.worker.submit("emergency", priority=0)
+        # A replacement path already supersedes the previous AirSim command.
+        # Sending hover before every ordinary replan produced stop-and-go motion.
+        # 새 경로 명령 자체가 기존 이동 명령을 대체하므로 일반 재탐색마다
+        # 호버링을 먼저 보내지 않습니다. 실제 충돌 위험 때만 별도로 정지합니다.
         self.worker.submit("path", path, self.speed.value(), priority=3)
         cruise = max(point[2] for point in path)
         self.message_label.setText(
@@ -438,6 +473,34 @@ class MissionControlWindow(QMainWindow):
 
     def _on_telemetry(self, data: dict) -> None:
         self._telemetry = data
+        collision_timestamp = float(data.get("collision_timestamp", 0.0))
+        if (
+            bool(data.get("has_collided", False))
+            and collision_timestamp > self._last_collision_timestamp
+        ):
+            self._last_collision_timestamp = collision_timestamp
+            self._recover_from_collision(data)
+
+        # Drop waypoints that were reached or clearly passed so a later
+        # low-speed safety check never points back toward an old waypoint.
+        # 통과한 웨이포인트를 제거하여 저속 상태의 안전 검사가 이미 지나온
+        # 지점을 다시 바라보며 좌우로 왕복하지 않도록 합니다.
+        while len(self._planned_path) > 1:
+            current_x = float(data["x"])
+            current_y = float(data["y"])
+            first_distance = math.hypot(
+                self._planned_path[0][0] - current_x,
+                self._planned_path[0][1] - current_y,
+            )
+            next_distance = math.hypot(
+                self._planned_path[1][0] - current_x,
+                self._planned_path[1][1] - current_y,
+            )
+            if first_distance <= 3.0 or next_distance < first_distance:
+                self._planned_path.pop(0)
+                self.minimap.set_path(self._planned_path)
+            else:
+                break
         self.minimap.set_drone(float(data["x"]), float(data["y"]))
         self.telemetry_labels["landed"].setText(str(data["landed"]))
         self.telemetry_labels["position"].setText(f'{data["x"]:.2f} / {data["y"]:.2f} m')
@@ -450,26 +513,203 @@ class MissionControlWindow(QMainWindow):
             f'{data["roll"]:.1f}° / {data["pitch"]:.1f}° / {data["yaw"]:.1f}°'
         )
 
+    def _recover_from_collision(self, data: dict) -> None:
+        """Stop pushing and turn a newly touched surface into a local wall.
+
+        충돌한 물체를 계속 밀지 않고 충돌면을 임시 장애물 벽으로 등록합니다.
+        """
+        self.worker.submit("emergency", priority=0)
+        object_name = str(data.get("collision_object", "알 수 없는 물체"))
+        if not self._active_target or not self.auto_replan_checkbox.isChecked():
+            self.message_label.setText(f"충돌 감지: {object_name} · 즉시 정지")
+            return
+
+        normal_x = float(data.get("collision_normal_x", 0.0))
+        normal_y = float(data.get("collision_normal_y", 0.0))
+        normal_length = math.hypot(normal_x, normal_y)
+        if normal_length < 0.1:
+            target_x = self._active_target[0] - float(data["x"])
+            target_y = self._active_target[1] - float(data["y"])
+            target_length = max(math.hypot(target_x, target_y), 1e-6)
+            normal_x = -target_x / target_length
+            normal_y = -target_y / target_length
+        else:
+            normal_x /= normal_length
+            normal_y /= normal_length
+
+        tangent_x, tangent_y = -normal_y, normal_x
+        impact_x = float(data.get("collision_x", data["x"]))
+        impact_y = float(data.get("collision_y", data["y"]))
+        obstacle_z = -float(data["altitude"])
+        offsets = np.arange(-10.0, 10.1, 1.0, dtype=np.float32)
+        collision_wall = np.column_stack(
+            (
+                impact_x + tangent_x * offsets,
+                impact_y + tangent_y * offsets,
+                np.full_like(offsets, obstacle_z),
+            )
+        )
+        existing = self.planner.obstacle_points
+        combined = (
+            np.vstack((existing, collision_wall))
+            if existing.size
+            else collision_wall
+        )
+        self.planner.set_obstacle_points(combined)
+
+        try:
+            self._last_replan = time.monotonic()
+            self._plan_and_fly(replan=True)
+            self._avoidance_grace_until = time.monotonic() + 4.0
+            self.message_label.setText(
+                f"충돌 복구: {object_name} · 임시 벽 등록 후 우회"
+            )
+        except Exception as exc:
+            self._on_error(f"충돌 후 우회 경로 생성 실패: {exc}")
+
     def _on_images(self, images: dict) -> None:
         self.camera_viewer.update_images(images)
+
+    def _nearest_obstacle_ahead(self, world: np.ndarray, pose: dict) -> float | None:
+        """Return the nearest LiDAR hit inside the vehicle's motion corridor.
+
+        드론의 이동 통로 안에서 가장 가까운 LiDAR 장애물 거리를 반환합니다.
+        """
+        if self._telemetry is None or not world.size:
+            return None
+
+        velocity_x = float(self._telemetry["vx"])
+        velocity_y = float(self._telemetry["vy"])
+        horizontal_speed = math.hypot(velocity_x, velocity_y)
+        if horizontal_speed >= 0.35:
+            direction_x = velocity_x / horizontal_speed
+            direction_y = velocity_y / horizontal_speed
+        elif self._planned_path:
+            # Immediately after replanning the vehicle has almost no velocity.
+            # Inspect the corridor toward the first remaining detour waypoint,
+            # not the blocked straight line toward the final destination.
+            # 재탐색 직후에는 속도가 거의 없으므로 최종 목적지 직선이 아니라
+            # 첫 우회 웨이포인트 방향을 기준으로 전방 장애물을 검사합니다.
+            waypoint = next(
+                (
+                    point
+                    for point in self._planned_path
+                    if math.hypot(
+                        point[0] - float(pose["x"]),
+                        point[1] - float(pose["y"]),
+                    )
+                    > 1.5
+                ),
+                None,
+            )
+            if waypoint is None:
+                return None
+            target_x = waypoint[0] - float(pose["x"])
+            target_y = waypoint[1] - float(pose["y"])
+            target_distance = math.hypot(target_x, target_y)
+            direction_x = target_x / target_distance
+            direction_y = target_y / target_distance
+        elif self._active_target is not None:
+            target_x = self._active_target[0] - float(pose["x"])
+            target_y = self._active_target[1] - float(pose["y"])
+            target_distance = math.hypot(target_x, target_y)
+            if target_distance < 0.1:
+                return None
+            direction_x = target_x / target_distance
+            direction_y = target_y / target_distance
+        else:
+            return None
+
+        delta_x = world[:, 0] - float(pose["x"])
+        delta_y = world[:, 1] - float(pose["y"])
+        forward = delta_x * direction_x + delta_y * direction_y
+        lateral = np.abs(-delta_x * direction_y + delta_y * direction_x)
+        vertical = np.abs(world[:, 2] - float(pose["z"]))
+
+        # Give the planner enough distance to stop and choose a new route.
+        # 드론이 정지한 뒤 새 경로를 선택할 수 있도록 충분한 탐지 거리를 둡니다.
+        detection_distance = max(6.0, horizontal_speed * 2.5 + 3.0)
+        corridor_half_width = self.planner.config.drone_radius_m + 0.5
+        mask = (
+            (forward >= 0.5)
+            & (forward <= detection_distance)
+            & (lateral <= corridor_half_width)
+            & (vertical <= self.planner.config.vertical_clearance_m)
+        )
+        if not np.any(mask):
+            return None
+        return float(np.min(forward[mask]))
 
     def _on_lidar(self, snapshot: object) -> None:
         points, pose = snapshot
         self.lidar_viewer.update_points(points)
         if not points.size:
+            self._obstacle_detection_count = 0
             return
-        valid = np.linalg.norm(points, axis=1) > 0.15
+        # Ignore very short returns from the vehicle body and attached camera
+        # meshes. They are not external obstacles.
+        # 기체 본체와 부착 카메라 메시에서 생기는 근거리 반사점은 외부
+        # 장애물이 아니므로 제외합니다.
+        valid = np.linalg.norm(points, axis=1) > 0.75
         local = points[valid]
-        yaw = float(pose["yaw"])
-        cosine, sine = math.cos(yaw), math.sin(yaw)
-        world = np.empty_like(local)
-        world[:, 0] = float(pose["x"]) + cosine * local[:, 0] - sine * local[:, 1]
-        world[:, 1] = float(pose["y"]) + sine * local[:, 0] + cosine * local[:, 1]
-        world[:, 2] = float(pose["z"]) + local[:, 2]
+        if not local.size:
+            self._obstacle_detection_count = 0
+            return
+        quaternion = np.asarray(
+            [
+                float(pose.get("qw", 1.0)),
+                float(pose.get("qx", 0.0)),
+                float(pose.get("qy", 0.0)),
+                float(pose.get("qz", 0.0)),
+            ],
+            dtype=np.float64,
+        )
+        quaternion /= max(float(np.linalg.norm(quaternion)), 1e-9)
+        qw, qx, qy, qz = quaternion
+        # SensorLocalFrame follows vehicle roll and pitch as well as yaw.
+        # Applying yaw alone turned ground returns into phantom obstacles while
+        # the multirotor was tilted during acceleration.
+        # SensorLocalFrame은 Yaw뿐 아니라 Roll/Pitch도 함께 움직입니다.
+        # 모든 축 회전을 반영해 가속 중 지면 점이 가짜 장애물이 되지 않게 합니다.
+        rotation = np.asarray(
+            [
+                [
+                    1.0 - 2.0 * (qy * qy + qz * qz),
+                    2.0 * (qx * qy - qz * qw),
+                    2.0 * (qx * qz + qy * qw),
+                ],
+                [
+                    2.0 * (qx * qy + qz * qw),
+                    1.0 - 2.0 * (qx * qx + qz * qz),
+                    2.0 * (qy * qz - qx * qw),
+                ],
+                [
+                    2.0 * (qx * qz - qy * qw),
+                    2.0 * (qy * qz + qx * qw),
+                    1.0 - 2.0 * (qx * qx + qy * qy),
+                ],
+            ],
+            dtype=np.float32,
+        )
+        world = local @ rotation.T
+        world[:, 0] += float(pose["x"])
+        world[:, 1] += float(pose["y"])
+        world[:, 2] += float(pose["z"])
         self.planner.set_obstacle_points(world)
         self.minimap.set_obstacles(world)
 
-        if not self.auto_replan_checkbox.isChecked() or not self._active_target:
+        preview_distance = self._nearest_obstacle_ahead(world, pose)
+        if "lidar" in self.telemetry_labels:
+            detection_text = (
+                f"전방 {preview_distance:.1f} m"
+                if preview_distance is not None
+                else "전방 장애물 없음"
+            )
+            self.telemetry_labels["lidar"].setText(
+                f"{len(local):,} points · {detection_text}"
+            )
+
+        if not self._active_target:
             return
         if self._telemetry is not None:
             remaining = math.hypot(
@@ -482,24 +722,57 @@ class MissionControlWindow(QMainWindow):
                 self.minimap.set_path([])
                 self.message_label.setText("목표 B에 도착했습니다.")
                 return
+
         now = time.monotonic()
-        route_for_check = list(self._planned_path)
-        if self._telemetry is not None:
-            route_for_check.insert(
-                0,
-                (
-                    float(self._telemetry["x"]),
-                    float(self._telemetry["y"]),
-                    float(self._telemetry["altitude"]),
-                ),
-            )
-        if now - self._last_replan > 1.5 and self.planner.route_blocked(route_for_check):
-            self._last_replan = now
-            try:
-                self._plan_and_fly(replan=True)
-            except Exception as exc:
-                self.worker.submit("emergency", priority=0)
-                self._on_error(f"재탐색 실패 · 호버링: {exc}")
+        if now < self._avoidance_grace_until:
+            self._obstacle_detection_count = 0
+            return
+
+        obstacle_distance = preview_distance
+        if obstacle_distance is not None:
+            self._obstacle_detection_count += 1
+            speed = 0.0 if self._telemetry is None else float(self._telemetry["speed"])
+            emergency_distance = max(2.5, speed * 1.5 + 1.0)
+
+            # A single sparse or noisy LiDAR return must not cancel a flight.
+            # 동일 장애물이 연속 세 번 확인된 경우에만 새 경로를 계산합니다.
+            if self._obstacle_detection_count < 3:
+                return
+
+            if not self.auto_replan_checkbox.isChecked():
+                if (
+                    obstacle_distance <= emergency_distance
+                    and now - self._last_emergency_stop > 2.0
+                ):
+                    self._last_emergency_stop = now
+                    self.worker.submit("emergency", priority=0)
+                self.message_label.setText(
+                    f"전방 {obstacle_distance:.1f}m 장애물 감지 · 안전 호버링"
+                )
+                return
+
+            if now - self._last_replan > 5.0:
+                self._last_replan = now
+                self._obstacle_detection_count = 0
+                try:
+                    # Cancel only once when collision is imminent, then give
+                    # the new lateral path time to establish its velocity.
+                    # 충돌이 임박한 경우에만 한 번 정지하고, 새 좌우 우회 경로가
+                    # 속도를 만들 수 있도록 잠시 센서 재명령 유예 시간을 둡니다.
+                    if obstacle_distance <= emergency_distance:
+                        self._last_emergency_stop = now
+                        self.worker.submit("emergency", priority=0)
+                    self._plan_and_fly(replan=True)
+                    self._avoidance_grace_until = now + 3.0
+                    self.message_label.setText(
+                        f"전방 {obstacle_distance:.1f}m 장애물 감지 · 회피 경로 생성"
+                    )
+                except Exception as exc:
+                    self.worker.submit("emergency", priority=0)
+                    self._on_error(f"회피 경로 생성 실패 · 호버링: {exc}")
+                return
+        else:
+            self._obstacle_detection_count = 0
 
     def _on_command_completed(self, command: str) -> None:
         names = {

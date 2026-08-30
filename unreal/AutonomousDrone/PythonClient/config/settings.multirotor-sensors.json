@@ -38,7 +38,7 @@
           "NumberOfChannels": 16,
           "Range": 100,
           "RotationsPerSecond": 10,
-          "MeasurementsPerCycle": 256,
+          "MeasurementsPerCycle": 2048,
           "HorizontalFOVStart": 0,
           "HorizontalFOVEnd": 360,
           "VerticalFOVUpper": 10,

@@ -85,12 +85,18 @@ class AirSimController:
             points = values[: values.size - (values.size % 3)].reshape((-1, 3))
         state = client.getMultirotorState(vehicle_name=self.vehicle_name)
         kin = state.kinematics_estimated
-        _roll, _pitch, yaw = airsim.quaternion_to_euler_angles(kin.orientation)
+        roll, pitch, yaw = airsim.quaternion_to_euler_angles(kin.orientation)
         return points, {
             "x": float(kin.position.x_val),
             "y": float(kin.position.y_val),
             "z": float(kin.position.z_val),
+            "roll": float(roll),
+            "pitch": float(pitch),
             "yaw": float(yaw),
+            "qx": float(kin.orientation.x_val),
+            "qy": float(kin.orientation.y_val),
+            "qz": float(kin.orientation.z_val),
+            "qw": float(kin.orientation.w_val),
         }
 
     def takeoff(self, altitude_m: float) -> None:
@@ -110,26 +116,59 @@ class AirSimController:
 
     def move_to(self, x_m: float, y_m: float, altitude_m: float, speed_mps: float) -> None:
         validate_destination(x_m, y_m, altitude_m, speed_mps)
+        lookahead_m = max(5.0, float(speed_mps) * 2.0)
         self._require_client().moveToPositionAsync(
             float(x_m),
             float(y_m),
             altitude_to_ned_z(altitude_m),
             float(speed_mps),
+            drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+            yaw_mode=airsim.YawMode(False, 0),
+            lookahead=lookahead_m,
+            adaptive_lookahead=0,
             vehicle_name=self.vehicle_name,
         )
 
     def move_path(self, points: Iterable[tuple[float, float, float]], speed_mps: float) -> None:
         point_list = list(points)
-        path = [airsim.Vector3r(x, y, altitude_to_ned_z(altitude)) for x, y, altitude in point_list]
         if not point_list:
             raise ValueError("비행 경로가 비어 있습니다.")
         for point in point_list:
             validate_destination(point[0], point[1], point[2], speed_mps)
+
+        # A single destination does not need path-following control. Using
+        # moveOnPathAsync for one point can repeatedly adjust path heading and
+        # make the multirotor appear to oscillate near the target direction.
+        # 목적지가 하나뿐이면 경로 추종 제어가 필요하지 않습니다. 단일 지점에
+        # moveOnPathAsync를 사용하면 방향을 반복 보정해 기체가 떨릴 수 있습니다.
+        if len(point_list) == 1:
+            x_m, y_m, altitude_m = point_list[0]
+            self.move_to(x_m, y_m, altitude_m, speed_mps)
+            return
+
+        path = [
+            airsim.Vector3r(x, y, altitude_to_ned_z(altitude))
+            for x, y, altitude in point_list
+        ]
+        # The planner grid is 2.5 m. AirSim's automatic lookahead was only
+        # about 1.8 m at the normal mission speed, so the controller reacted
+        # to nearly every grid corner. Looking several metres ahead produces
+        # one continuous trajectory through the short A* segments.
+        # 경로계획 격자는 2.5m이지만 기본 선행거리는 약 1.8m여서 각 격자 모서리마다
+        # 제어가 반응했습니다. 선행거리를 늘려 짧은 A* 구간을 연속 경로로 추종합니다.
+        lookahead_m = max(5.0, float(speed_mps) * 2.0)
         self._require_client().moveOnPathAsync(
             path,
             float(speed_mps),
-            drivetrain=airsim.DrivetrainType.ForwardOnly,
+            # A multirotor can translate without continuously turning toward
+            # every short A* segment. This prevents heading corrections from
+            # producing visible left/right jitter.
+            # 멀티로터는 각 A* 구간 방향으로 계속 회전하지 않고도 이동할 수 있습니다.
+            # 불필요한 방향 보정 때문에 좌우로 흔들리는 현상을 방지합니다.
+            drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
             yaw_mode=airsim.YawMode(False, 0),
+            lookahead=lookahead_m,
+            adaptive_lookahead=0,
             vehicle_name=self.vehicle_name,
         )
 
@@ -144,6 +183,7 @@ class AirSimController:
     def telemetry(self) -> dict[str, float | str]:
         client = self._require_client()
         state = client.getMultirotorState(vehicle_name=self.vehicle_name)
+        collision = client.simGetCollisionInfo(vehicle_name=self.vehicle_name)
         kin = state.kinematics_estimated
         roll, pitch, yaw = airsim.quaternion_to_euler_angles(kin.orientation)
         velocity = kin.linear_velocity
@@ -160,6 +200,14 @@ class AirSimController:
             "roll": radians_to_degrees(roll),
             "pitch": radians_to_degrees(pitch),
             "yaw": radians_to_degrees(yaw),
+            "has_collided": bool(collision.has_collided),
+            "collision_timestamp": float(collision.time_stamp),
+            "collision_object": str(collision.object_name),
+            "collision_x": float(collision.impact_point.x_val),
+            "collision_y": float(collision.impact_point.y_val),
+            "collision_z": float(collision.impact_point.z_val),
+            "collision_normal_x": float(collision.normal.x_val),
+            "collision_normal_y": float(collision.normal.y_val),
         }
 
     def camera_images(self) -> dict[str, bytes]:
