@@ -61,6 +61,38 @@ class AirSimController:
         client.enableApiControl(True, vehicle_name=self.vehicle_name)
         client.armDisarm(armed, vehicle_name=self.vehicle_name)
 
+    def set_spawn(self, x_m: float, y_m: float) -> None:
+        """Teleport the simulated vehicle before flight; this is not a real-aircraft API."""
+        client = self._require_client()
+        state = client.getMultirotorState(vehicle_name=self.vehicle_name)
+        if state.landed_state != airsim.LandedState.Landed:
+            raise RuntimeError("스폰 위치는 착륙 상태에서만 변경할 수 있습니다.")
+        client.enableApiControl(False, vehicle_name=self.vehicle_name)
+        pose = airsim.Pose(
+            airsim.Vector3r(float(x_m), float(y_m), 0.0),
+            state.kinematics_estimated.orientation,
+        )
+        client.simSetVehiclePose(pose, True, vehicle_name=self.vehicle_name)
+
+    def lidar_snapshot(self) -> tuple[np.ndarray, dict[str, float]]:
+        """Return local LiDAR points plus the vehicle pose needed for map projection."""
+        client = self._require_client()
+        data = client.getLidarData(lidar_name=self.lidar_name, vehicle_name=self.vehicle_name)
+        values = np.asarray(data.point_cloud, dtype=np.float32)
+        if values.size < 3:
+            points = np.empty((0, 3), dtype=np.float32)
+        else:
+            points = values[: values.size - (values.size % 3)].reshape((-1, 3))
+        state = client.getMultirotorState(vehicle_name=self.vehicle_name)
+        kin = state.kinematics_estimated
+        _roll, _pitch, yaw = airsim.quaternion_to_euler_angles(kin.orientation)
+        return points, {
+            "x": float(kin.position.x_val),
+            "y": float(kin.position.y_val),
+            "z": float(kin.position.z_val),
+            "yaw": float(yaw),
+        }
+
     def takeoff(self, altitude_m: float) -> None:
         client = self._require_client()
         validate_destination(0.0, 0.0, altitude_m, 2.0)
@@ -145,11 +177,5 @@ class AirSimController:
         }
 
     def lidar_points(self) -> np.ndarray:
-        data = self._require_client().getLidarData(
-            lidar_name=self.lidar_name,
-            vehicle_name=self.vehicle_name,
-        )
-        values = np.asarray(data.point_cloud, dtype=np.float32)
-        if values.size < 3:
-            return np.empty((0, 3), dtype=np.float32)
-        return values[: values.size - (values.size % 3)].reshape((-1, 3))
+        points, _pose = self.lidar_snapshot()
+        return points

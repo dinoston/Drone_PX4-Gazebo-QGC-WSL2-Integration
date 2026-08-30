@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 import queue
 import sys
 import time
@@ -37,8 +38,10 @@ from PySide6.QtWidgets import (
 from common.airsim_client import AirSimController
 from missions.heart_mission import build_heart_path
 from missions.square_mission import build_square_path
+from navigation.grid_planner import AltitudeGridPlanner, PlannerConfig
 from perception.camera_viewer import CameraViewer
 from perception.lidar_viewer import LidarViewer
+from ui.minimap import MiniMapWidget
 
 
 class AirSimWorker(QThread):
@@ -97,6 +100,8 @@ class AirSimWorker(QThread):
                     self.connection_changed.emit(False, "연결 해제")
                 elif name == "arm":
                     self.controller.arm(bool(args[0]))
+                elif name == "spawn":
+                    self.controller.set_spawn(float(args[0]), float(args[1]))
                 elif name == "takeoff":
                     self.controller.takeoff(float(args[0]))
                 elif name == "hover":
@@ -129,7 +134,7 @@ class AirSimWorker(QThread):
     def _poll_sensors(self) -> None:
         try:
             self.images_updated.emit(self.controller.camera_images())
-            self.lidar_updated.emit(self.controller.lidar_points())
+            self.lidar_updated.emit(self.controller.lidar_snapshot())
         except Exception as exc:
             now = time.monotonic()
             if now - self._last_sensor_error > 5.0:
@@ -144,6 +149,16 @@ class MissionControlWindow(QMainWindow):
         self.resize(1500, 920)
         self.settings = QSettings("AutonomousDrone", "MissionControl")
         self._connected = False
+        # The AirBase capture covers 1400 m. A 2.5 m planning grid keeps
+        # full-map A* practical while retaining useful obstacle clearance.
+        self.planner = AltitudeGridPlanner(
+            PlannerConfig(half_extent_m=900.0, resolution_m=2.5)
+        )
+        self._telemetry: dict | None = None
+        self._planned_path: list[tuple[float, float, float]] = []
+        self._active_target: tuple[float, float, float] | None = None
+        self._last_replan = 0.0
+        self._spawn_xy = (0.0, 0.0)
 
         self.worker = AirSimWorker()
         self.worker.connection_changed.connect(self._on_connection_changed)
@@ -231,7 +246,24 @@ class MissionControlWindow(QMainWindow):
         destination_form.addRow("Y · 오른쪽/동쪽", self.destination_y)
         destination_form.addRow("목적지 고도", self.destination_altitude)
         destination_form.addRow("이동 속도", self.speed)
-        self.move_button = QPushButton("목적지로 이동")
+        map_mode_row = QHBoxLayout()
+        self.spawn_select_button = QPushButton("스폰 A 선택")
+        self.target_select_button = QPushButton("목표 B 선택")
+        self.spawn_select_button.setCheckable(True)
+        self.target_select_button.setCheckable(True)
+        self.target_select_button.setChecked(True)
+        self.spawn_select_button.clicked.connect(lambda: self._set_map_mode("spawn"))
+        self.target_select_button.clicked.connect(lambda: self._set_map_mode("target"))
+        map_mode_row.addWidget(self.spawn_select_button)
+        map_mode_row.addWidget(self.target_select_button)
+        destination_form.addRow("지도 클릭 모드", map_mode_row)
+        self.apply_spawn_button = QPushButton("선택한 위치에 스폰 적용")
+        self.apply_spawn_button.clicked.connect(self._apply_spawn)
+        destination_form.addRow(self.apply_spawn_button)
+        self.auto_replan_checkbox = QCheckBox("LiDAR 장애물 감지 시 자동 재탐색")
+        self.auto_replan_checkbox.setChecked(True)
+        destination_form.addRow(self.auto_replan_checkbox)
+        self.move_button = QPushButton("A* 경로로 목표 B 이동")
         self.move_button.clicked.connect(self._move)
         destination_form.addRow(self.move_button)
         layout.addWidget(destination_group)
@@ -270,6 +302,15 @@ class MissionControlWindow(QMainWindow):
         tabs = QTabWidget()
         self.camera_viewer = CameraViewer()
         self.lidar_viewer = LidarViewer()
+        minimap_image = PYTHON_CLIENT_ROOT / "assets" / "Minimap_AirBase.PNG"
+        self.minimap = MiniMapWidget(
+            half_extent_m=700.0,
+            center_xy_m=(53.31, 159.39),
+            background_path=str(minimap_image),
+        )
+        self.minimap.spawn_selected.connect(self._on_spawn_selected)
+        self.minimap.target_selected.connect(self._on_target_selected)
+        tabs.addTab(self.minimap, "미니맵 · A* 경로")
         tabs.addTab(self.camera_viewer, "RGB · Depth · Segmentation")
         tabs.addTab(self.lidar_viewer, "LiDAR 3D 점군")
         return tabs
@@ -295,12 +336,63 @@ class MissionControlWindow(QMainWindow):
         self.worker.submit("takeoff", self.takeoff_altitude.value())
 
     def _move(self) -> None:
-        self.worker.submit(
-            "move",
+        try:
+            self._plan_and_fly(replan=False)
+        except Exception as exc:
+            self._on_error(f"경로계획: {exc}")
+
+    def _set_map_mode(self, mode: str) -> None:
+        self.minimap.set_selection_mode(mode)
+        is_spawn = mode == "spawn"
+        self.spawn_select_button.setChecked(is_spawn)
+        self.target_select_button.setChecked(not is_spawn)
+        self.message_label.setText(
+            "미니맵에서 스폰 A를 클릭하세요."
+            if is_spawn
+            else "미니맵에서 목표 B를 클릭하세요."
+        )
+
+    def _on_spawn_selected(self, x_m: float, y_m: float) -> None:
+        self._spawn_xy = (x_m, y_m)
+        self.message_label.setText(
+            f"스폰 A 선택: X={x_m:.1f}, Y={y_m:.1f}m · 적용 버튼을 누르세요."
+        )
+
+    def _on_target_selected(self, x_m: float, y_m: float) -> None:
+        self.destination_x.setValue(x_m)
+        self.destination_y.setValue(y_m)
+        self._active_target = None
+        self.message_label.setText(f"목표 B 선택: X={x_m:.1f}, Y={y_m:.1f}m")
+
+    def _apply_spawn(self) -> None:
+        self.worker.submit("spawn", self._spawn_xy[0], self._spawn_xy[1], priority=2)
+
+    def _plan_and_fly(self, replan: bool) -> None:
+        if self._telemetry is None:
+            raise RuntimeError("드론 위치를 아직 받지 못했습니다.")
+        target = (
             self.destination_x.value(),
             self.destination_y.value(),
             self.destination_altitude.value(),
-            self.speed.value(),
+        )
+        start = (float(self._telemetry["x"]), float(self._telemetry["y"]))
+        path = self.planner.plan(
+            start,
+            (target[0], target[1]),
+            target[2],
+            float(self._telemetry["altitude"]),
+        )
+        self._planned_path = path
+        self._active_target = target
+        self.minimap.set_target(target[0], target[1])
+        self.minimap.set_path(path)
+        if replan:
+            self.worker.submit("emergency", priority=0)
+        self.worker.submit("path", path, self.speed.value(), priority=3)
+        cruise = max(point[2] for point in path)
+        self.message_label.setText(
+            f"{'재탐색' if replan else '경로 생성'} 완료: "
+            f"웨이포인트 {len(path)}개, 최고 {cruise:.1f}m"
         )
 
     def _square_mission(self) -> None:
@@ -337,6 +429,7 @@ class MissionControlWindow(QMainWindow):
             self.hover_button,
             self.land_button,
             self.emergency_button,
+            self.apply_spawn_button,
             self.move_button,
             self.square_button,
             self.heart_button,
@@ -344,6 +437,8 @@ class MissionControlWindow(QMainWindow):
             widget.setEnabled(enabled)
 
     def _on_telemetry(self, data: dict) -> None:
+        self._telemetry = data
+        self.minimap.set_drone(float(data["x"]), float(data["y"]))
         self.telemetry_labels["landed"].setText(str(data["landed"]))
         self.telemetry_labels["position"].setText(f'{data["x"]:.2f} / {data["y"]:.2f} m')
         self.telemetry_labels["altitude"].setText(f'{data["altitude"]:.2f} m')
@@ -358,12 +453,58 @@ class MissionControlWindow(QMainWindow):
     def _on_images(self, images: dict) -> None:
         self.camera_viewer.update_images(images)
 
-    def _on_lidar(self, points: np.ndarray) -> None:
+    def _on_lidar(self, snapshot: object) -> None:
+        points, pose = snapshot
         self.lidar_viewer.update_points(points)
+        if not points.size:
+            return
+        valid = np.linalg.norm(points, axis=1) > 0.15
+        local = points[valid]
+        yaw = float(pose["yaw"])
+        cosine, sine = math.cos(yaw), math.sin(yaw)
+        world = np.empty_like(local)
+        world[:, 0] = float(pose["x"]) + cosine * local[:, 0] - sine * local[:, 1]
+        world[:, 1] = float(pose["y"]) + sine * local[:, 0] + cosine * local[:, 1]
+        world[:, 2] = float(pose["z"]) + local[:, 2]
+        self.planner.set_obstacle_points(world)
+        self.minimap.set_obstacles(world)
+
+        if not self.auto_replan_checkbox.isChecked() or not self._active_target:
+            return
+        if self._telemetry is not None:
+            remaining = math.hypot(
+                self._active_target[0] - float(self._telemetry["x"]),
+                self._active_target[1] - float(self._telemetry["y"]),
+            )
+            if remaining < 1.5:
+                self._active_target = None
+                self._planned_path = []
+                self.minimap.set_path([])
+                self.message_label.setText("목표 B에 도착했습니다.")
+                return
+        now = time.monotonic()
+        route_for_check = list(self._planned_path)
+        if self._telemetry is not None:
+            route_for_check.insert(
+                0,
+                (
+                    float(self._telemetry["x"]),
+                    float(self._telemetry["y"]),
+                    float(self._telemetry["altitude"]),
+                ),
+            )
+        if now - self._last_replan > 1.5 and self.planner.route_blocked(route_for_check):
+            self._last_replan = now
+            try:
+                self._plan_and_fly(replan=True)
+            except Exception as exc:
+                self.worker.submit("emergency", priority=0)
+                self._on_error(f"재탐색 실패 · 호버링: {exc}")
 
     def _on_command_completed(self, command: str) -> None:
         names = {
             "arm": "ARM/DISARM 명령 전송",
+            "spawn": "선택한 스폰 A 위치를 적용했습니다.",
             "takeoff": "이륙 명령 전송",
             "hover": "호버링 명령 전송",
             "move": "목적지 이동 시작",
