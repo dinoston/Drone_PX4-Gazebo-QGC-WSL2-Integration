@@ -2,6 +2,7 @@
   "SeeDocsAt": "https://cosys-lab.github.io/Cosys-AirSim/settings/",
   "SettingsVersion": 2.0,
   "SimMode": "Multirotor",
+  "ViewMode": "SpringArmChase",
   "SubWindows": [
     {
       "WindowID": 0,
@@ -33,10 +34,11 @@
         "Lidar1": {
           "SensorType": 6,
           "Enabled": true,
+          "DataFrame": "SensorLocalFrame",
           "NumberOfChannels": 16,
           "Range": 100,
           "RotationsPerSecond": 10,
-          "MeasurementsPerCycle": 1024,
+          "MeasurementsPerCycle": 256,
           "HorizontalFOVStart": 0,
           "HorizontalFOVEnd": 360,
           "VerticalFOVUpper": 10,
@@ -47,7 +49,7 @@
           "Roll": 0,
           "Pitch": 0,
           "Yaw": 0,
-          "DrawDebugPoints": true
+          "DrawDebugPoints": false
         }
       }
     }

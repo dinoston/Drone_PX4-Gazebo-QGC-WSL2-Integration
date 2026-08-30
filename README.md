@@ -23,6 +23,12 @@ This repository documents an evolving autonomous-drone simulation project. The c
 - Experimental LiDAR obstacle monitoring and route replanning
 - Planned work on smoother motion, static/dynamic obstacle avoidance, object tracking, and tag-based behaviors
 
+### LiDAR Visualization Performance Tuning
+
+During flight testing, continuously rendering the green LiDAR debug points caused the Unreal view to stutter and appear to shake. The LiDAR sensor remains enabled for obstacle detection, but its in-world debug visualization is disabled with `"DrawDebugPoints": false`. The scan density was also reduced from 1024 to 256 measurements per cycle.
+
+RGB, Depth, and Segmentation subwindows remain visible. This optimization disables only the expensive green LiDAR visualization; LiDAR data collection and the Python obstacle-planning pipeline continue to operate.
+
 ### Demo Video
 
 [Watch the AirSim minimap navigation demo](media/airsim-minimap-navigation-demo.mp4)
@@ -203,6 +209,12 @@ Mission Control includes AirSim connection controls, flight commands, telemetry,
 - AirSim `moveOnPathAsync()` 기반 경로 이동
 - LiDAR 장애물 감시 및 경로 재탐색 실험
 - 향후 부드러운 이동, 정적·동적 장애물 회피, 객체 추적과 태그별 행동 개발 예정
+
+### LiDAR 시각화 성능 조정
+
+비행 시험 중 초록색 LiDAR 디버그 점을 Unreal 화면에 계속 그릴 때 화면이 끊기고 흔들려 보이는 현상이 발생했습니다. 장애물 감지를 위한 LiDAR 센서는 계속 사용하지만, Unreal 내부 디버그 표시는 `"DrawDebugPoints": false`로 비활성화했습니다. 회전당 측정량도 1024에서 256으로 낮췄습니다.
+
+RGB, Depth, Segmentation 보조 화면은 계속 표시됩니다. 이 최적화는 부하가 큰 초록색 LiDAR 시각화만 끄며, LiDAR 데이터 수집과 Python 장애물 경로계획 기능은 계속 작동합니다.
 
 ### 데모 영상
 
