@@ -45,6 +45,17 @@ class AirSimController:
 
     def disconnect(self) -> None:
         if self.client is not None:
+            # Closing the desktop UI does not automatically cancel an async
+            # path command that is already running inside the AirSim server.
+            # Cancel it before releasing API control so PIE can tear down the
+            # vehicle and RPC server without waiting on residual flight work.
+            # 데스크톱 UI를 닫아도 AirSim 서버 내부에서 실행 중인 비동기 경로
+            # 명령은 자동 취소되지 않습니다. API 제어권을 해제하기 전에 명령을
+            # 취소하여 PIE 종료 시 남은 비행 작업을 기다리지 않도록 합니다.
+            try:
+                self.client.cancelLastTask(vehicle_name=self.vehicle_name)
+            except Exception:
+                pass
             try:
                 self.client.enableApiControl(False, vehicle_name=self.vehicle_name)
             except Exception:
