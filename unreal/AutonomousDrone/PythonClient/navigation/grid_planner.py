@@ -55,11 +55,39 @@ class AltitudeGridPlanner:
         goal_xy: tuple[float, float],
         requested_altitude_m: float,
         current_altitude_m: float,
+        max_altitude_m: float | None = None,
     ) -> list[tuple[float, float, float]]:
         self._validate_xy(start_xy)
         self._validate_xy(goal_xy)
-        base = max(1.0, float(requested_altitude_m))
-        steps = int(self.config.max_extra_altitude_m / self.config.altitude_step_m)
+        # Once avoidance has climbed above the requested altitude, do not plan
+        # a descent until the goal. This prevents repeated down/up oscillation.
+        # 회피 중 요청 고도보다 높아졌다면 목적지 전에는 하강 경로를 만들지
+        # 않습니다. 장애물 앞에서 상하로 반복 진동하는 현상을 방지합니다.
+        base = max(
+            1.0,
+            float(requested_altitude_m),
+            float(current_altitude_m),
+        )
+        # The climb limit is relative to the requested mission altitude, not
+        # the latest replan altitude, so repeated scans cannot climb forever.
+        # 상승 제한은 최근 재탐색 고도가 아니라 사용자가 지정한 임무 고도를
+        # 기준으로 계산하여 반복 감지 때 무한히 상승하지 않도록 합니다.
+        configured_maximum = (
+            float(requested_altitude_m) + self.config.max_extra_altitude_m
+        )
+        if max_altitude_m is not None:
+            # A ceiling collision establishes a temporary mission altitude cap.
+            # 천장 충돌이 발생하면 현재 임무에 임시 최대 고도를 설정합니다.
+            configured_maximum = min(
+                configured_maximum,
+                max(1.0, float(max_altitude_m)),
+            )
+            base = min(base, configured_maximum)
+        maximum_altitude = max(base, configured_maximum)
+        steps = max(
+            0,
+            int((maximum_altitude - base) / self.config.altitude_step_m),
+        )
 
         best: tuple[float, list[tuple[int, int]], float] | None = None
         for index in range(steps + 1):
@@ -81,7 +109,20 @@ class AltitudeGridPlanner:
             raise RuntimeError("현재 장애물 지도에서 목적지까지 안전한 경로를 찾지 못했습니다.")
 
         _, cells, cruise_altitude = best
-        path = [(*self._from_cell(cell), cruise_altitude) for cell in cells[1:]]
+        path: list[tuple[float, float, float]] = []
+        # When a higher layer is selected, climb in place before moving toward
+        # the obstacle. A diagonal climb can still touch a tall facade.
+        # 더 높은 고도층을 선택하면 장애물 쪽으로 이동하기 전에 제자리에서
+        # 먼저 상승합니다. 대각선 상승은 높은 외벽에 계속 닿을 수 있습니다.
+        if abs(cruise_altitude - current_altitude_m) > 0.25:
+            path.append(
+                (float(start_xy[0]), float(start_xy[1]), cruise_altitude)
+            )
+        path.extend(
+            (*self._from_cell(cell), cruise_altitude) for cell in cells[1:]
+        )
+        # Return to the requested mission altitude only after reaching the goal.
+        # 목적지에 도착한 뒤에만 사용자가 지정한 임무 고도로 복귀합니다.
         if cruise_altitude != requested_altitude_m:
             path.append((float(goal_xy[0]), float(goal_xy[1]), float(requested_altitude_m)))
         if not path:

@@ -146,6 +146,44 @@ class AirSimController:
             self.move_to(x_m, y_m, altitude_m, speed_mps)
             return
 
+        client = self._require_client()
+        state = client.getMultirotorState(vehicle_name=self.vehicle_name)
+        position = state.kinematics_estimated.position
+        first_x, first_y, first_altitude = point_list[0]
+        horizontal_to_first = float(
+            np.hypot(first_x - position.x_val, first_y - position.y_val)
+        )
+        current_altitude = -float(position.z_val)
+        if (
+            horizontal_to_first <= 4.0
+            and abs(first_altitude - current_altitude) > 0.5
+        ):
+            # Complete the vertical stage before starting horizontal path
+            # following. Otherwise AirSim lookahead cuts the corner diagonally.
+            # 수평 경로 추종을 시작하기 전에 수직 이동을 완료합니다. 그렇지
+            # 않으면 AirSim 선행거리 때문에 모서리를 대각선으로 잘라 이동합니다.
+            vertical_speed = min(max(float(speed_mps), 1.0), 2.0)
+            client.moveToZAsync(
+                altitude_to_ned_z(first_altitude),
+                velocity=vertical_speed,
+                timeout_sec=15.0,
+                yaw_mode=airsim.YawMode(False, 0),
+                vehicle_name=self.vehicle_name,
+            ).join()
+            reached_state = client.getMultirotorState(vehicle_name=self.vehicle_name)
+            reached_altitude = -float(
+                reached_state.kinematics_estimated.position.z_val
+            )
+            if abs(reached_altitude - first_altitude) > 0.8:
+                client.hoverAsync(vehicle_name=self.vehicle_name)
+                raise RuntimeError(
+                    "수직 회피 고도에 도달하지 못해 수평 이동을 중단했습니다."
+                )
+            point_list.pop(0)
+            if not point_list:
+                client.hoverAsync(vehicle_name=self.vehicle_name)
+                return
+
         path = [
             airsim.Vector3r(x, y, altitude_to_ned_z(altitude))
             for x, y, altitude in point_list
@@ -157,7 +195,7 @@ class AirSimController:
         # 경로계획 격자는 2.5m이지만 기본 선행거리는 약 1.8m여서 각 격자 모서리마다
         # 제어가 반응했습니다. 선행거리를 늘려 짧은 A* 구간을 연속 경로로 추종합니다.
         lookahead_m = max(5.0, float(speed_mps) * 2.0)
-        self._require_client().moveOnPathAsync(
+        client.moveOnPathAsync(
             path,
             float(speed_mps),
             # A multirotor can translate without continuously turning toward
@@ -171,6 +209,70 @@ class AirSimController:
             adaptive_lookahead=0,
             vehicle_name=self.vehicle_name,
         )
+
+    def recover_and_move_path(
+        self,
+        points: Iterable[tuple[float, float, float]],
+        speed_mps: float,
+        normal_x: float,
+        normal_y: float,
+        normal_z: float,
+        altitude_m: float,
+        escape_altitude_m: float,
+        retreat_distance_m: float = 3.0,
+    ) -> None:
+        """Back away from a collision, then execute the replanned path.
+
+        충돌면에서 먼저 후퇴한 다음 새로 계산한 회피 경로를 실행합니다.
+        """
+        client = self._require_client()
+        client.enableApiControl(True, vehicle_name=self.vehicle_name)
+        client.cancelLastTask(vehicle_name=self.vehicle_name)
+        client.hoverAsync(vehicle_name=self.vehicle_name).join()
+        if abs(float(normal_z)) >= 0.55:
+            # Ceiling normals point down in NED, so moving along the normal
+            # lowers altitude. Floor normals perform the opposite escape.
+            # NED에서 천장 법선은 아래쪽을 향하므로 법선 방향 이동은 고도를
+            # 낮춥니다. 바닥 법선은 반대로 상승 회피를 수행합니다.
+            client.moveToZAsync(
+                altitude_to_ned_z(escape_altitude_m),
+                velocity=1.5,
+                timeout_sec=10.0,
+                yaw_mode=airsim.YawMode(False, 0),
+                vehicle_name=self.vehicle_name,
+            ).join()
+            reached_state = client.getMultirotorState(
+                vehicle_name=self.vehicle_name
+            )
+            reached_altitude = -float(
+                reached_state.kinematics_estimated.position.z_val
+            )
+            if abs(reached_altitude - escape_altitude_m) > 0.8:
+                client.hoverAsync(vehicle_name=self.vehicle_name)
+                raise RuntimeError(
+                    "천장/바닥 충돌면에서 안전 고도로 벗어나지 못했습니다."
+                )
+        else:
+            retreat_speed = 1.5
+            retreat_duration = max(
+                0.5,
+                float(retreat_distance_m) / retreat_speed,
+            )
+            # A fixed-duration velocity command can escape contact even when a
+            # position command cannot converge because the body touches the wall.
+            # 고정 시간 속도 명령은 기체가 벽에 닿아 위치 명령이 수렴하지 못하는
+            # 상황에서도 충돌면에서 빠져나올 수 있습니다.
+            client.moveByVelocityZAsync(
+                float(normal_x) * retreat_speed,
+                float(normal_y) * retreat_speed,
+                altitude_to_ned_z(altitude_m),
+                retreat_duration,
+                drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                yaw_mode=airsim.YawMode(False, 0),
+                vehicle_name=self.vehicle_name,
+            ).join()
+        client.hoverAsync(vehicle_name=self.vehicle_name).join()
+        self.move_path(points, speed_mps)
 
     def land(self) -> None:
         self._require_client().landAsync(vehicle_name=self.vehicle_name)
@@ -208,6 +310,7 @@ class AirSimController:
             "collision_z": float(collision.impact_point.z_val),
             "collision_normal_x": float(collision.normal.x_val),
             "collision_normal_y": float(collision.normal.y_val),
+            "collision_normal_z": float(collision.normal.z_val),
         }
 
     def camera_images(self) -> dict[str, bytes]:

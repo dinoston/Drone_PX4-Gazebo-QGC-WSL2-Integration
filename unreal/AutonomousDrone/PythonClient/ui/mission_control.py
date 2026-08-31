@@ -118,6 +118,8 @@ class AirSimWorker(QThread):
                     self.controller.move_to(*args)
                 elif name == "path":
                     self.controller.move_path(*args)
+                elif name == "recovery_path":
+                    self.controller.recover_and_move_path(*args)
                 elif name == "land":
                     self.controller.land()
                 elif name == "emergency":
@@ -161,7 +163,7 @@ class AirSimWorker(QThread):
 class MissionControlWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Autonomous Drone Mission Control · Avoidance v4")
+        self.setWindowTitle("Autonomous Drone Mission Control · Avoidance v5")
         self.resize(1500, 920)
         self.settings = QSettings("AutonomousDrone", "MissionControl")
         self._connected = False
@@ -175,11 +177,12 @@ class MissionControlWindow(QMainWindow):
                 resolution_m=2.5,
                 drone_radius_m=2.5,
                 vertical_clearance_m=1.5,
-                # Keep the first avoidance stage horizontal. Repeated LiDAR
-                # replans must not alternate between different flight levels.
-                # 1단계 회피는 현재 고도를 유지해 반복 재탐색 때마다
-                # 드론이 위아래로 흔들리는 현상을 방지합니다.
-                max_extra_altitude_m=0.0,
+                # LiDAR may select a higher layer in 2 m steps. The 8 m limit
+                # allows a gentle climb without permitting an excessive escape.
+                # LiDAR가 2m 간격의 상위 고도층을 선택할 수 있습니다. 최대 8m로
+                # 제한하여 과도하게 상승하지 않고 완만하게 장애물을 넘습니다.
+                altitude_step_m=2.0,
+                max_extra_altitude_m=8.0,
             )
         )
         self._telemetry: dict | None = None
@@ -190,6 +193,8 @@ class MissionControlWindow(QMainWindow):
         self._obstacle_detection_count = 0
         self._avoidance_grace_until = 0.0
         self._last_collision_timestamp = 0.0
+        self._avoidance_altitude_floor_m = 1.0
+        self._avoidance_altitude_ceiling_m: float | None = None
         self._spawn_xy = (0.0, 0.0)
 
         self.worker = AirSimWorker()
@@ -400,20 +405,50 @@ class MissionControlWindow(QMainWindow):
     def _apply_spawn(self) -> None:
         self.worker.submit("spawn", self._spawn_xy[0], self._spawn_xy[1], priority=2)
 
-    def _plan_and_fly(self, replan: bool) -> None:
+    def _plan_and_fly(
+        self,
+        replan: bool,
+        start_override: tuple[float, float] | None = None,
+        altitude_override: float | None = None,
+        collision_escape: tuple[float, float, float, float, float] | None = None,
+    ) -> None:
         if self._telemetry is None:
             raise RuntimeError("드론 위치를 아직 받지 못했습니다.")
+        if not replan:
+            # A manually started mission clears constraints learned by the
+            # previous route. New collisions will establish fresh limits.
+            # 사용자가 새 임무를 시작하면 이전 경로에서 학습한 고도 제한을
+            # 초기화합니다. 새 충돌이 발생하면 제한을 다시 설정합니다.
+            self._avoidance_altitude_floor_m = 1.0
+            self._avoidance_altitude_ceiling_m = None
         target = (
             self.destination_x.value(),
             self.destination_y.value(),
             self.destination_altitude.value(),
         )
-        start = (float(self._telemetry["x"]), float(self._telemetry["y"]))
+        safe_target_altitude = max(
+            target[2],
+            self._avoidance_altitude_floor_m,
+        )
+        if self._avoidance_altitude_ceiling_m is not None:
+            safe_target_altitude = min(
+                safe_target_altitude,
+                self._avoidance_altitude_ceiling_m,
+            )
+        start = start_override or (
+            float(self._telemetry["x"]),
+            float(self._telemetry["y"]),
+        )
         path = self.planner.plan(
             start,
             (target[0], target[1]),
-            target[2],
-            float(self._telemetry["altitude"]),
+            safe_target_altitude,
+            (
+                float(altitude_override)
+                if altitude_override is not None
+                else float(self._telemetry["altitude"])
+            ),
+            max_altitude_m=self._avoidance_altitude_ceiling_m,
         )
         self._planned_path = path
         self._active_target = target
@@ -423,7 +458,20 @@ class MissionControlWindow(QMainWindow):
         # Sending hover before every ordinary replan produced stop-and-go motion.
         # 새 경로 명령 자체가 기존 이동 명령을 대체하므로 일반 재탐색마다
         # 호버링을 먼저 보내지 않습니다. 실제 충돌 위험 때만 별도로 정지합니다.
-        self.worker.submit("path", path, self.speed.value(), priority=3)
+        if collision_escape is None:
+            self.worker.submit("path", path, self.speed.value(), priority=3)
+        else:
+            self.worker.submit(
+                "recovery_path",
+                path,
+                self.speed.value(),
+                collision_escape[0],
+                collision_escape[1],
+                collision_escape[2],
+                collision_escape[3],
+                collision_escape[4],
+                priority=0,
+            )
         cruise = max(point[2] for point in path)
         self.message_label.setText(
             f"{'재탐색' if replan else '경로 생성'} 완료: "
@@ -514,41 +562,88 @@ class MissionControlWindow(QMainWindow):
         )
 
     def _recover_from_collision(self, data: dict) -> None:
-        """Stop pushing and turn a newly touched surface into a local wall.
+        """Stop pushing and add the touched surface to the obstacle map.
 
-        충돌한 물체를 계속 밀지 않고 충돌면을 임시 장애물 벽으로 등록합니다.
+        충돌한 물체를 계속 밀지 않고 충돌면을 임시 장애물로 등록합니다.
         """
-        self.worker.submit("emergency", priority=0)
         object_name = str(data.get("collision_object", "알 수 없는 물체"))
         if not self._active_target or not self.auto_replan_checkbox.isChecked():
+            self.worker.submit("emergency", priority=0)
             self.message_label.setText(f"충돌 감지: {object_name} · 즉시 정지")
             return
 
         normal_x = float(data.get("collision_normal_x", 0.0))
         normal_y = float(data.get("collision_normal_y", 0.0))
-        normal_length = math.hypot(normal_x, normal_y)
+        normal_z = float(data.get("collision_normal_z", 0.0))
+        impact_x = float(data.get("collision_x", data["x"]))
+        impact_y = float(data.get("collision_y", data["y"]))
+        impact_z = float(
+            data.get("collision_z", -float(data["altitude"]))
+        )
+        vehicle_z = -float(data["altitude"])
+
+        # Complex meshes occasionally report an unreliable surface normal.
+        # Infer a ceiling or floor from the impact-point direction as a backup.
+        # 복잡한 메시에서는 충돌면 법선이 부정확할 수 있으므로 충돌 지점의
+        # 방향을 보조 정보로 사용해 천장과 바닥을 판별합니다.
+        impact_dx = impact_x - float(data["x"])
+        impact_dy = impact_y - float(data["y"])
+        impact_dz = impact_z - vehicle_z
+        impact_horizontal = math.hypot(impact_dx, impact_dy)
+        impact_is_vertical = abs(impact_dz) >= max(
+            0.2,
+            impact_horizontal * 0.65,
+        )
+        if abs(normal_z) < 0.55 and impact_is_vertical:
+            # In NED, a negative impact delta is above the vehicle (ceiling),
+            # so the safe escape direction has a positive/downward Z normal.
+            # NED에서 음수 충돌 높이 차이는 기체 위쪽(천장)이므로 안전한
+            # 회피 방향은 양수/아래쪽 Z 법선입니다.
+            normal_x = 0.0
+            normal_y = 0.0
+            normal_z = 1.0 if impact_dz < 0.0 else -1.0
+        normal_length = math.sqrt(
+            normal_x * normal_x + normal_y * normal_y + normal_z * normal_z
+        )
         if normal_length < 0.1:
             target_x = self._active_target[0] - float(data["x"])
             target_y = self._active_target[1] - float(data["y"])
             target_length = max(math.hypot(target_x, target_y), 1e-6)
             normal_x = -target_x / target_length
             normal_y = -target_y / target_length
+            normal_z = 0.0
         else:
             normal_x /= normal_length
             normal_y /= normal_length
+            normal_z /= normal_length
 
-        tangent_x, tangent_y = -normal_y, normal_x
-        impact_x = float(data.get("collision_x", data["x"]))
-        impact_y = float(data.get("collision_y", data["y"]))
-        obstacle_z = -float(data["altitude"])
-        offsets = np.arange(-10.0, 10.1, 1.0, dtype=np.float32)
-        collision_wall = np.column_stack(
-            (
-                impact_x + tangent_x * offsets,
-                impact_y + tangent_y * offsets,
-                np.full_like(offsets, obstacle_z),
+        obstacle_z = impact_z
+        vertical_collision = abs(normal_z) >= 0.55
+        if vertical_collision:
+            # Register a local ceiling/floor patch instead of a vertical wall.
+            # 수직 벽이 아니라 천장/바닥의 국소 평면으로 장애물을 등록합니다.
+            patch_offsets = np.arange(-5.0, 5.1, 1.0, dtype=np.float32)
+            patch_x, patch_y = np.meshgrid(patch_offsets, patch_offsets)
+            collision_wall = np.column_stack(
+                (
+                    impact_x + patch_x.ravel(),
+                    impact_y + patch_y.ravel(),
+                    np.full(patch_x.size, obstacle_z, dtype=np.float32),
+                )
             )
-        )
+        else:
+            horizontal_length = max(math.hypot(normal_x, normal_y), 1e-6)
+            wall_normal_x = normal_x / horizontal_length
+            wall_normal_y = normal_y / horizontal_length
+            tangent_x, tangent_y = -wall_normal_y, wall_normal_x
+            offsets = np.arange(-10.0, 10.1, 1.0, dtype=np.float32)
+            collision_wall = np.column_stack(
+                (
+                    impact_x + tangent_x * offsets,
+                    impact_y + tangent_y * offsets,
+                    np.full_like(offsets, obstacle_z),
+                )
+            )
         existing = self.planner.obstacle_points
         combined = (
             np.vstack((existing, collision_wall))
@@ -558,11 +653,61 @@ class MissionControlWindow(QMainWindow):
         self.planner.set_obstacle_points(combined)
 
         try:
+            retreat_distance = 3.0
+            current_altitude = float(data["altitude"])
+            if vertical_collision:
+                retreat_start = (float(data["x"]), float(data["y"]))
+                escape_altitude = max(
+                    1.0,
+                    current_altitude - normal_z * retreat_distance,
+                )
+                if normal_z > 0.0:
+                    # A downward NED normal identifies a ceiling. Stay below
+                    # this height for the rest of the current mission.
+                    # NED 아래 방향 법선은 천장을 의미합니다. 현재 임무가 끝날
+                    # 때까지 이 높이보다 낮게 비행합니다.
+                    self._avoidance_altitude_ceiling_m = (
+                        escape_altitude
+                        if self._avoidance_altitude_ceiling_m is None
+                        else min(
+                            self._avoidance_altitude_ceiling_m,
+                            escape_altitude,
+                        )
+                    )
+                else:
+                    # An upward NED normal identifies a floor. Stay above it.
+                    # NED 위 방향 법선은 바닥을 의미하므로 안전 높이 이상을 유지합니다.
+                    self._avoidance_altitude_floor_m = max(
+                        self._avoidance_altitude_floor_m,
+                        escape_altitude,
+                    )
+            else:
+                retreat_start = (
+                    float(data["x"]) + normal_x * retreat_distance,
+                    float(data["y"]) + normal_y * retreat_distance,
+                )
+                escape_altitude = current_altitude
             self._last_replan = time.monotonic()
-            self._plan_and_fly(replan=True)
+            # Plan from the expected retreat point. The worker physically backs
+            # away first, climbs in place, and only then starts horizontal flight.
+            # 예상 후퇴 지점에서 경로를 계산합니다. 작업 스레드는 실제로 먼저
+            # 후퇴하고 제자리 상승을 마친 뒤에만 수평 비행을 시작합니다.
+            self._plan_and_fly(
+                replan=True,
+                start_override=retreat_start,
+                altitude_override=escape_altitude,
+                collision_escape=(
+                    normal_x,
+                    normal_y,
+                    normal_z,
+                    current_altitude,
+                    escape_altitude,
+                ),
+            )
             self._avoidance_grace_until = time.monotonic() + 4.0
             self.message_label.setText(
-                f"충돌 복구: {object_name} · 임시 벽 등록 후 우회"
+                f"충돌 복구: {object_name} · "
+                f"{'하강' if normal_z > 0.55 else '상승' if normal_z < -0.55 else '후퇴'} 후 우회"
             )
         except Exception as exc:
             self._on_error(f"충돌 후 우회 경로 생성 실패: {exc}")
