@@ -42,12 +42,6 @@ During flight testing, continuously rendering the green LiDAR debug points cause
 
 RGB, Depth, and Segmentation subwindows remain visible. This optimization disables only the expensive green LiDAR visualization; LiDAR data collection and the Python obstacle-planning pipeline continue to operate.
 
-### Demo Video
-
-[Watch the AirSim minimap navigation demo](media/airsim-minimap-navigation-demo.mp4)
-
-The video shows the current Unreal Engine and Mission Control workflow, including minimap-based movement testing.
-
 ### Project Status
 
 - **Active:** Unreal Engine + Cosys-AirSim autonomous-navigation prototype
@@ -228,12 +222,6 @@ Mission Control includes AirSim connection controls, flight commands, telemetry,
 비행 시험 중 초록색 LiDAR 디버그 점을 Unreal 화면에 계속 그릴 때 화면이 끊기고 흔들려 보이는 현상이 발생했습니다. 장애물 감지를 위한 LiDAR 센서는 계속 사용하며, 부하가 큰 Unreal 내부 디버그 표시는 비활성화했습니다.
 
 RGB, Depth, Segmentation 보조 화면은 계속 표시됩니다. 이 최적화는 부하가 큰 초록색 LiDAR 시각화만 끄며, LiDAR 데이터 수집과 Python 장애물 경로계획 기능은 계속 작동합니다.
-
-### 데모 영상
-
-[AirSim 미니맵 자율이동 데모 보기](media/airsim-minimap-navigation-demo.mp4)
-
-영상은 Unreal Engine과 Mission Control에서 미니맵 기반 이동을 시험하는 현재 개발 상태를 보여줍니다.
 
 ### 개발 상태
 
