@@ -2,9 +2,18 @@
 
 ## Demo Preview / 데모 미리보기
 
-[![AirSim minimap navigation demo](media/airsim-minimap-navigation-preview.gif)](media/airsim-minimap-navigation-demo.mp4)
+<table>
+  <tr>
+    <th>Minimap Navigation / 미니맵 경로 비행</th>
+    <th>Enemy Drone Detection / 적 드론 인식</th>
+  </tr>
+  <tr>
+    <td><a href="media/airsim-minimap-navigation-demo.mp4"><img src="media/airsim-minimap-navigation-preview.gif" alt="AirSim minimap navigation demo" width="100%"></a></td>
+    <td><a href="media/enemy-drone-detection-demo.mp4"><img src="media/enemy-drone-detection-preview.gif" alt="Enemy drone detection and bounding-box demo" width="100%"></a></td>
+  </tr>
+</table>
 
-**Click the animated preview to watch the full MP4. / 움직이는 미리보기를 클릭하면 전체 MP4 영상을 볼 수 있습니다.**
+**Click either animated preview to watch its full MP4. / 움직이는 미리보기 중 하나를 클릭하면 해당 전체 MP4 영상을 볼 수 있습니다.**
 
 ## English
 
