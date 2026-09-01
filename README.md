@@ -5,15 +5,19 @@
 <table>
   <tr>
     <th>Minimap Navigation / 미니맵 경로 비행</th>
+  </tr>
+  <tr>
+    <td align="center"><a href="media/airsim-minimap-navigation-demo.mp4"><img src="media/airsim-minimap-navigation-preview.gif" alt="AirSim minimap navigation demo" width="720" height="405"></a></td>
+  </tr>
+  <tr>
     <th>Enemy Drone Detection / 적 드론 인식</th>
   </tr>
   <tr>
-    <td><a href="media/airsim-minimap-navigation-demo.mp4"><img src="media/airsim-minimap-navigation-preview.gif" alt="AirSim minimap navigation demo" width="100%"></a></td>
-    <td><a href="media/enemy-drone-detection-demo.mp4"><img src="media/enemy-drone-detection-preview.gif" alt="Enemy drone detection and bounding-box demo" width="100%"></a></td>
+    <td align="center"><a href="media/enemy-drone-detection-demo.mp4"><img src="media/enemy-drone-detection-preview.gif" alt="Enemy drone detection and bounding-box demo" width="720" height="405"></a></td>
   </tr>
 </table>
 
-**Click either animated preview to watch its full MP4. / 움직이는 미리보기 중 하나를 클릭하면 해당 전체 MP4 영상을 볼 수 있습니다.**
+**Click an animated preview below to watch its full MP4. / 아래 움직이는 미리보기를 클릭하면 해당 전체 MP4 영상을 볼 수 있습니다.**
 
 ## English
 
